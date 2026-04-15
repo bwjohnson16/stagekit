@@ -99,7 +99,7 @@ async function listInventoryItemRows<T>(selectClause: string, configure?: (query
   const rows: T[] = [];
 
   for (let from = 0; ; from += INVENTORY_PAGE_SIZE) {
-    let query = supabase.from("inventory_items").select(selectClause) as InventoryItemsQuery;
+    let query: InventoryItemsQuery = supabase.from("inventory_items").select(selectClause) as unknown as InventoryItemsQuery;
     if (configure) {
       query = configure(query);
     }
