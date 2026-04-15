@@ -16,6 +16,7 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   currency: "USD",
 });
 const STORAGE_SIGN_BATCH_SIZE = 100;
+const PHOTO_QUERY_BATCH_SIZE = 100;
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -101,19 +102,32 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
   const thumbnailByItemId = new Map<string, string>();
 
   if (itemIds.length > 0) {
-    const { data: photos, error: photosError } = await supabase
-      .from("inventory_photos")
-      .select("item_id,storage_bucket,storage_path,sort_order,created_at")
-      .in("item_id", itemIds)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true });
+    const photos: Array<{
+      item_id: string;
+      storage_bucket: string;
+      storage_path: string;
+      sort_order: number;
+      created_at: string;
+    }> = [];
 
-    if (photosError) {
-      throw new Error(`Failed to load inventory thumbnails: ${photosError.message}`);
+    for (let from = 0; from < itemIds.length; from += PHOTO_QUERY_BATCH_SIZE) {
+      const itemIdBatch = itemIds.slice(from, from + PHOTO_QUERY_BATCH_SIZE);
+      const { data: photoBatch, error: photosError } = await supabase
+        .from("inventory_photos")
+        .select("item_id,storage_bucket,storage_path,sort_order,created_at")
+        .in("item_id", itemIdBatch)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true });
+
+      if (photosError) {
+        throw new Error(`Failed to load inventory thumbnails: ${photosError.message}`);
+      }
+
+      photos.push(...(photoBatch ?? []));
     }
 
     const firstPhotoByItemId = new Map<string, { bucket: string; path: string }>();
-    for (const photo of photos ?? []) {
+    for (const photo of photos) {
       if (!photo.storage_bucket || !photo.storage_path) {
         continue;
       }
