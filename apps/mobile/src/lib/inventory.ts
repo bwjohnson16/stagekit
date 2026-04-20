@@ -5,6 +5,14 @@ import { getSupabaseClient } from "./supabase";
 export const inventoryStatusOptions = ["available", "on_job", "packed", "maintenance", "sold", "lost"] as const;
 export const inventoryConditionOptions = ["new", "like_new", "good", "fair", "rough"] as const;
 const INVENTORY_PAGE_SIZE = 500;
+const PHOTO_URL_TTL_SECONDS = 60 * 60;
+const THUMBNAIL_TRANSFORM = {
+  width: 240,
+  height: 240,
+  resize: "cover",
+  quality: 60,
+} as const;
+const SIGNED_URL_CACHE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 export type InventoryItemStatus = Database["public"]["Enums"]["inventory_item_status"];
 export type InventoryItemCondition = Database["public"]["Enums"]["inventory_condition"];
@@ -39,6 +47,14 @@ export type InventoryListItem = InventoryItem & {
   thumbnail_url: string | null;
 };
 
+export type InventoryListFilters = {
+  search?: string | null;
+  color?: string | null;
+  category?: string | null;
+  room?: string | null;
+  locationName?: string | null;
+};
+
 type InventoryPhotoRow = {
   id: string;
   item_id: string;
@@ -46,6 +62,29 @@ type InventoryPhotoRow = {
   storage_path: string;
   sort_order: number;
 };
+
+type PhotoTransform = {
+  width: number;
+  height: number;
+  resize: "cover" | "contain" | "fill";
+  quality: number;
+};
+
+type InventoryQueryResult = PromiseLike<{
+  data: unknown[] | null;
+  error: { message: string } | null;
+  count?: number | null;
+}>;
+
+type InventoryItemsQuery = {
+  eq: (column: string, value: string) => InventoryItemsQuery;
+  in: (column: string, values: readonly string[]) => InventoryItemsQuery;
+  or: (filters: string) => InventoryItemsQuery;
+  order: (column: string, options: { ascending: boolean }) => InventoryItemsQuery;
+  range: (from: number, to: number) => InventoryQueryResult;
+};
+
+const signedPhotoUrlCache = new Map<string, { expiresAt: number; url: string }>();
 
 export type InventoryPhoto = {
   id: string;
@@ -65,7 +104,28 @@ function chunkArray<T>(items: T[], size: number) {
   return chunks;
 }
 
-async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[]) {
+function getSignedPhotoUrlCacheKey(bucket: string, storagePath: string, transform?: PhotoTransform) {
+  return JSON.stringify([bucket, storagePath, transform ?? null]);
+}
+
+function getCachedSignedPhotoUrl(bucket: string, storagePath: string, transform?: PhotoTransform) {
+  const cached = signedPhotoUrlCache.get(getSignedPhotoUrlCacheKey(bucket, storagePath, transform));
+
+  if (!cached || cached.expiresAt - SIGNED_URL_CACHE_REFRESH_MARGIN_MS <= Date.now()) {
+    return null;
+  }
+
+  return cached.url;
+}
+
+function setCachedSignedPhotoUrl(bucket: string, storagePath: string, url: string, transform?: PhotoTransform) {
+  signedPhotoUrlCache.set(getSignedPhotoUrlCacheKey(bucket, storagePath, transform), {
+    expiresAt: Date.now() + PHOTO_URL_TTL_SECONDS * 1000,
+    url,
+  });
+}
+
+async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[], transform?: PhotoTransform) {
   const supabase = getSupabaseClient();
   const signedUrlByKey = new Map<string, string>();
   const photosByBucket = new Map<string, InventoryPhotoRow[]>();
@@ -76,10 +136,71 @@ async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[]) {
     photosByBucket.set(photo.storage_bucket, bucketPhotos);
   }
 
+  if (transform) {
+    try {
+      const uniquePhotos = [...photosByBucket.entries()].flatMap(([bucket, bucketPhotos]) =>
+        [...new Set(bucketPhotos.map((photo) => photo.storage_path))].map((storagePath) => ({
+          bucket,
+          storagePath,
+        })),
+      );
+      const uncachedPhotos = uniquePhotos.filter((photo) => {
+        const cachedUrl = getCachedSignedPhotoUrl(photo.bucket, photo.storagePath, transform);
+        if (cachedUrl) {
+          signedUrlByKey.set(`${photo.bucket}:${photo.storagePath}`, cachedUrl);
+          return false;
+        }
+
+        return true;
+      });
+
+      for (const photoChunk of chunkArray(uncachedPhotos, 20)) {
+        const signedUrlResults = await Promise.all(
+          photoChunk.map(async (photo) => {
+            const { data, error } = await supabase.storage.from(photo.bucket).createSignedUrl(photo.storagePath, PHOTO_URL_TTL_SECONDS, {
+              transform,
+            });
+
+            if (error) {
+              throw new Error(error.message);
+            }
+
+            return {
+              ...photo,
+              signedUrl: data.signedUrl,
+            };
+          }),
+        );
+
+        for (const entry of signedUrlResults) {
+          if (entry.signedUrl) {
+            setCachedSignedPhotoUrl(entry.bucket, entry.storagePath, entry.signedUrl, transform);
+            signedUrlByKey.set(`${entry.bucket}:${entry.storagePath}`, entry.signedUrl);
+          }
+        }
+      }
+
+      return signedUrlByKey;
+    } catch (error) {
+      console.warn("Falling back to untransformed inventory photo URLs.", error);
+      return createSignedPhotoUrlMap(photos);
+    }
+  }
+
   for (const [bucket, bucketPhotos] of photosByBucket.entries()) {
     const uniquePaths = [...new Set(bucketPhotos.map((photo) => photo.storage_path))];
-    for (const pathChunk of chunkArray(uniquePaths, 100)) {
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrls(pathChunk, 60 * 60);
+    const uncachedPaths = uniquePaths.filter((storagePath) => {
+      const cachedUrl = getCachedSignedPhotoUrl(bucket, storagePath);
+      if (cachedUrl) {
+        signedUrlByKey.set(`${bucket}:${storagePath}`, cachedUrl);
+        return false;
+      }
+
+      return true;
+    });
+
+    for (const pathChunk of chunkArray(uncachedPaths, 100)) {
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrls(pathChunk, PHOTO_URL_TTL_SECONDS);
 
       if (error) {
         throw new Error(error.message);
@@ -91,6 +212,7 @@ async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[]) {
         }
 
         signedUrlByKey.set(`${bucket}:${entry.path}`, entry.signedUrl);
+        setCachedSignedPhotoUrl(bucket, entry.path, entry.signedUrl);
       }
     }
   }
@@ -123,6 +245,19 @@ async function listInventoryPhotosForItems(itemIds: string[]) {
   return photoRows;
 }
 
+async function listInventoryCoverPhotosForItems(itemIds: string[]) {
+  const photos = await listInventoryPhotosForItems(itemIds);
+  const coverPhotosByItemId = new Map<string, InventoryPhotoRow>();
+
+  for (const photo of photos) {
+    if (!coverPhotosByItemId.has(photo.item_id)) {
+      coverPhotosByItemId.set(photo.item_id, photo);
+    }
+  }
+
+  return [...coverPhotosByItemId.values()];
+}
+
 async function listActiveJobAssignmentsForItems(itemIds: string[]) {
   if (itemIds.length === 0) {
     return [] as { item_id: string; job_id: string }[];
@@ -144,17 +279,22 @@ async function listActiveJobAssignmentsForItems(itemIds: string[]) {
   return assignmentRows;
 }
 
-async function listInventoryItemRows<T>(selectClause: string, configure?: (query: any) => any) {
+async function listInventoryItemRows<T>(selectClause: string, configure?: (query: InventoryItemsQuery) => InventoryItemsQuery, maxRows?: number) {
   const supabase = getSupabaseClient();
   const rows: T[] = [];
 
   for (let from = 0; ; from += INVENTORY_PAGE_SIZE) {
-    let query = supabase.from("inventory_items").select(selectClause);
+    const remainingRows = maxRows == null ? INVENTORY_PAGE_SIZE : Math.min(INVENTORY_PAGE_SIZE, maxRows - rows.length);
+    if (remainingRows <= 0) {
+      break;
+    }
+
+    let query = supabase.from("inventory_items").select(selectClause) as unknown as InventoryItemsQuery;
     if (configure) {
       query = configure(query);
     }
 
-    const { data, error } = await query.range(from, from + INVENTORY_PAGE_SIZE - 1);
+    const { data, error } = await query.range(from, from + remainingRows - 1);
     if (error) {
       throw new Error(error.message);
     }
@@ -168,6 +308,101 @@ async function listInventoryItemRows<T>(selectClause: string, configure?: (query
   }
 
   return rows;
+}
+
+function cleanInventorySearch(value: string | null | undefined) {
+  return (value ?? "").trim().replace(/[%_,()]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function getLocationIdsByName(locationName: string | null | undefined) {
+  const cleanedLocationName = (locationName ?? "").trim();
+
+  if (!cleanedLocationName) {
+    return null;
+  }
+
+  const { data, error } = await getSupabaseClient().from("locations").select("id").eq("name", cleanedLocationName);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []).map((location) => location.id);
+}
+
+function applyInventoryListFilters(query: InventoryItemsQuery, filters: InventoryListFilters | undefined, locationIds: string[] | null) {
+  let nextQuery = query;
+  const cleanedSearch = cleanInventorySearch(filters?.search);
+
+  if (cleanedSearch) {
+    const pattern = `%${cleanedSearch}%`;
+    nextQuery = nextQuery.or(
+      [
+        `name.ilike.${pattern}`,
+        `sku.ilike.${pattern}`,
+        `brand.ilike.${pattern}`,
+        `category.ilike.${pattern}`,
+        `color.ilike.${pattern}`,
+        `room.ilike.${pattern}`,
+        `item_code.ilike.${pattern}`,
+        `dimensions.ilike.${pattern}`,
+        `notes.ilike.${pattern}`,
+      ].join(","),
+    );
+  }
+
+  if (filters?.color) {
+    nextQuery = nextQuery.eq("color", filters.color);
+  }
+
+  if (filters?.category) {
+    nextQuery = nextQuery.eq("category", filters.category);
+  }
+
+  if (filters?.room) {
+    nextQuery = nextQuery.eq("room", filters.room);
+  }
+
+  if (locationIds) {
+    nextQuery = nextQuery.in("current_location_id", locationIds);
+  }
+
+  return nextQuery;
+}
+
+async function listInventoryItemRowsPage<T>({
+  selectClause,
+  filters,
+  maxRows,
+}: {
+  selectClause: string;
+  filters?: InventoryListFilters;
+  maxRows: number;
+}) {
+  const locationIds = await getLocationIdsByName(filters?.locationName);
+
+  if (locationIds && locationIds.length === 0) {
+    return { rows: [] as T[], totalCount: 0 };
+  }
+
+  const supabase = getSupabaseClient();
+  const baseQuery = supabase.from("inventory_items").select(selectClause, { count: "exact" }) as unknown as InventoryItemsQuery;
+  const query = applyInventoryListFilters(baseQuery, filters, locationIds)
+    .order("created_at", { ascending: false })
+    .range(0, maxRows - 1);
+
+  const { data, error, count } = await query;
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const rows = (data ?? []) as T[];
+
+  return {
+    rows,
+    totalCount: count ?? rows.length,
+  };
 }
 
 export type InventoryAssignableItem = Pick<
@@ -206,12 +441,8 @@ export type InventoryItemUpdate = Pick<
   | "source_job_id"
 >;
 
-export async function listInventoryItems() {
+async function hydrateInventoryListItems(items: InventoryItem[], includeThumbnails: boolean) {
   const supabase = getSupabaseClient();
-  const items = await listInventoryItemRows<InventoryItem>(
-    "id,name,sku,category,status,condition,brand,color,material,dimensions,item_code,marked_for_disposal,notes,estimated_listing_price_cents,purchase_price_cents,purchase_date,replacement_cost_cents,current_location_id,room,source_job_id,tags",
-    (query) => query.order("created_at", { ascending: false }),
-  );
   const locationIds = [...new Set(items.map((item) => item.current_location_id).filter((value): value is string => Boolean(value)))];
   const sourceJobIds = [...new Set(items.map((item) => item.source_job_id).filter((value): value is string => Boolean(value)))];
   const itemIds = items.map((item) => item.id);
@@ -220,7 +451,7 @@ export async function listInventoryItems() {
     locationIds.length > 0 ? supabase.from("locations").select("id,name").in("id", locationIds) : Promise.resolve({ data: [], error: null }),
     sourceJobIds.length > 0 ? supabase.from("jobs").select("id,name").in("id", sourceJobIds) : Promise.resolve({ data: [], error: null }),
     listActiveJobAssignmentsForItems(itemIds),
-    listInventoryPhotosForItems(itemIds),
+    includeThumbnails ? listInventoryCoverPhotosForItems(itemIds) : Promise.resolve([]),
   ]);
 
   if (locationError) {
@@ -242,7 +473,7 @@ export async function listInventoryItems() {
   const activeJobNameById = new Map((activeJobs ?? []).map((job) => [job.id, job.name]));
   const activeJobNameByItemId = new Map(activeAssignments.map((assignment) => [assignment.item_id, activeJobNameById.get(assignment.job_id) ?? null]));
   const thumbnailUrlByItemId = new Map<string, string>();
-  const signedUrlByKey = await createSignedPhotoUrlMap(photos);
+  const signedUrlByKey = includeThumbnails ? await createSignedPhotoUrlMap(photos, THUMBNAIL_TRANSFORM) : new Map<string, string>();
 
   for (const photo of photos) {
     if (thumbnailUrlByItemId.has(photo.item_id)) {
@@ -263,6 +494,57 @@ export async function listInventoryItems() {
     source_job_name: item.source_job_id ? jobNameById.get(item.source_job_id) ?? null : null,
     thumbnail_url: thumbnailUrlByItemId.get(item.id) ?? null,
   })) as InventoryListItem[];
+}
+
+export async function listInventoryItems({ includeThumbnails = true, maxItems }: { includeThumbnails?: boolean; maxItems?: number } = {}) {
+  const items = await listInventoryItemRows<InventoryItem>(
+    "id,name,sku,category,status,condition,brand,color,material,dimensions,item_code,marked_for_disposal,notes,estimated_listing_price_cents,purchase_price_cents,purchase_date,replacement_cost_cents,current_location_id,room,source_job_id,tags",
+    (query) => query.order("created_at", { ascending: false }),
+    maxItems,
+  );
+
+  return hydrateInventoryListItems(items, includeThumbnails);
+}
+
+export async function listInventoryItemsPage({
+  filters,
+  includeThumbnails = true,
+  maxItems,
+}: {
+  filters?: InventoryListFilters;
+  includeThumbnails?: boolean;
+  maxItems: number;
+}) {
+  const { rows, totalCount } = await listInventoryItemRowsPage<InventoryItem>({
+    selectClause:
+      "id,name,sku,category,status,condition,brand,color,material,dimensions,item_code,marked_for_disposal,notes,estimated_listing_price_cents,purchase_price_cents,purchase_date,replacement_cost_cents,current_location_id,room,source_job_id,tags",
+    filters,
+    maxRows: maxItems,
+  });
+
+  return {
+    items: await hydrateInventoryListItems(rows, includeThumbnails),
+    totalCount,
+  };
+}
+
+export async function listInventoryItemThumbnails(itemIds: string[]) {
+  const photos = await listInventoryCoverPhotosForItems(itemIds);
+  const signedUrlByKey = await createSignedPhotoUrlMap(photos, THUMBNAIL_TRANSFORM);
+  const thumbnailUrlByItemId = new Map<string, string>();
+
+  for (const photo of photos) {
+    if (thumbnailUrlByItemId.has(photo.item_id)) {
+      continue;
+    }
+
+    const signedUrl = signedUrlByKey.get(`${photo.storage_bucket}:${photo.storage_path}`);
+    if (signedUrl) {
+      thumbnailUrlByItemId.set(photo.item_id, signedUrl);
+    }
+  }
+
+  return thumbnailUrlByItemId;
 }
 
 export async function getInventoryItem(itemId: string) {
@@ -293,10 +575,10 @@ export async function listPackListInventoryItems() {
     (query) => query.order("name", { ascending: true }),
   );
   const locationIds = [...new Set(items.map((item) => item.current_location_id).filter((value): value is string => Boolean(value)))];
-  const photos = await listInventoryPhotosForItems(items.map((item) => item.id));
+  const photos = await listInventoryCoverPhotosForItems(items.map((item) => item.id));
   const [locationsResult, signedUrlByKey] = await Promise.all([
     locationIds.length > 0 ? getSupabaseClient().from("locations").select("id,name").in("id", locationIds) : Promise.resolve({ data: [], error: null }),
-    createSignedPhotoUrlMap(photos),
+    createSignedPhotoUrlMap(photos, THUMBNAIL_TRANSFORM),
   ]);
 
   if (locationsResult.error) {

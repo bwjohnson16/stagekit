@@ -2,6 +2,14 @@ import type { Database } from "./database";
 import { isMissingSceneSchemaError } from "./schema-compat";
 import { getSupabaseClient } from "./supabase";
 
+const PHOTO_URL_TTL_SECONDS = 60 * 60;
+const THUMBNAIL_TRANSFORM = {
+  width: 240,
+  height: 240,
+  resize: "cover",
+  quality: 60,
+} as const;
+
 type JobRow = Database["public"]["Tables"]["jobs"]["Row"];
 
 type JobAddressFields = Pick<JobRow, "address1" | "address2" | "city" | "state" | "postal">;
@@ -92,6 +100,13 @@ type InventoryPhotoRow = {
   sort_order: number;
 };
 
+type PhotoTransform = {
+  width: number;
+  height: number;
+  resize: "cover" | "contain" | "fill";
+  quality: number;
+};
+
 type JobPackRequestRow = {
   id: string;
   request_text: string;
@@ -126,7 +141,7 @@ function chunkArray<T>(items: T[], size: number) {
   return chunks;
 }
 
-async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[]) {
+async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[], transform?: PhotoTransform) {
   const supabase = getSupabaseClient();
   const signedUrlByKey = new Map<string, string>();
   const photosByBucket = new Map<string, InventoryPhotoRow[]>();
@@ -137,10 +152,51 @@ async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[]) {
     photosByBucket.set(photo.storage_bucket, bucketPhotos);
   }
 
+  if (transform) {
+    try {
+      const uniquePhotos = [...photosByBucket.entries()].flatMap(([bucket, bucketPhotos]) =>
+        [...new Set(bucketPhotos.map((photo) => photo.storage_path))].map((storagePath) => ({
+          bucket,
+          storagePath,
+        })),
+      );
+
+      for (const photoChunk of chunkArray(uniquePhotos, 20)) {
+        const signedUrlResults = await Promise.all(
+          photoChunk.map(async (photo) => {
+            const { data, error } = await supabase.storage.from(photo.bucket).createSignedUrl(photo.storagePath, PHOTO_URL_TTL_SECONDS, {
+              transform,
+            });
+
+            if (error) {
+              throw new Error(error.message);
+            }
+
+            return {
+              ...photo,
+              signedUrl: data.signedUrl,
+            };
+          }),
+        );
+
+        for (const entry of signedUrlResults) {
+          if (entry.signedUrl) {
+            signedUrlByKey.set(`${entry.bucket}:${entry.storagePath}`, entry.signedUrl);
+          }
+        }
+      }
+
+      return signedUrlByKey;
+    } catch (error) {
+      console.warn("Falling back to untransformed job photo URLs.", error);
+      return createSignedPhotoUrlMap(photos);
+    }
+  }
+
   for (const [bucket, bucketPhotos] of photosByBucket.entries()) {
     const uniquePaths = [...new Set(bucketPhotos.map((photo) => photo.storage_path))];
     for (const pathChunk of chunkArray(uniquePaths, 100)) {
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrls(pathChunk, 60 * 60);
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrls(pathChunk, PHOTO_URL_TTL_SECONDS);
 
       if (error) {
         throw new Error(error.message);
@@ -182,6 +238,19 @@ async function listInventoryPhotosForItems(itemIds: string[]) {
   }
 
   return photoRows;
+}
+
+async function listInventoryCoverPhotosForItems(itemIds: string[]) {
+  const photos = await listInventoryPhotosForItems(itemIds);
+  const coverPhotosByItemId = new Map<string, InventoryPhotoRow>();
+
+  for (const photo of photos) {
+    if (!coverPhotosByItemId.has(photo.item_id)) {
+      coverPhotosByItemId.set(photo.item_id, photo);
+    }
+  }
+
+  return [...coverPhotosByItemId.values()];
 }
 
 function buildAddressLabel(parts: Array<string | null | undefined>) {
@@ -468,8 +537,8 @@ export async function getJobDetail(jobId: string) {
     throw new Error(assignedItemsError.message);
   }
 
-  const photos = await listInventoryPhotosForItems([...new Set([...requestedItemIds, ...pickedItemIds])]);
-  const signedUrlByKey = await createSignedPhotoUrlMap(photos);
+  const photos = await listInventoryCoverPhotosForItems([...new Set([...requestedItemIds, ...pickedItemIds])]);
+  const signedUrlByKey = await createSignedPhotoUrlMap(photos, THUMBNAIL_TRANSFORM);
   const thumbnailUrlByItemId = new Map<string, string>();
 
   for (const photo of photos) {

@@ -1,7 +1,8 @@
 {
   "expo": {
     "name": "StageKit",
-    "slug": "stagekit-mobile",
+    "slug": "stagekit",
+    "scheme": "stagekit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -12,10 +13,16 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "plugins": ["expo-router", "expo-image-picker"],
+    "plugins": [
+      "expo-router",
+      "expo-image-picker"
+    ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.stagekit.mobile"
+      "bundleIdentifier": "com.stagekit.mobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -24,13 +31,18 @@
       },
       "package": "com.stagekit.mobile",
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "expo-router"
-    ]
+    "extra": {
+      "eas": {
+        "projectId": "cfc5921e-89f2-4984-8885-9fc9e1721797"
+      }
+    }
   }
 }

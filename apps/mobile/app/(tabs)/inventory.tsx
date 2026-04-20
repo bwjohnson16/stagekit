@@ -1,15 +1,15 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Image, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 
 import { AppScreen, Card, EmptyState, Field, Hero, LoadingState, Message, SectionTitle, SecondaryButton } from "../../src/components/ui";
-import { listInventoryItems, type InventoryListItem } from "../../src/lib/inventory";
+import { listInventoryItemsPage, listInventoryItemThumbnails, type InventoryListFilters, type InventoryListItem } from "../../src/lib/inventory";
 import { createExactItemPackRequest, listJobs, type Job } from "../../src/lib/jobs";
 import { colors } from "../../src/lib/theme";
 
-function normalize(value: string | null | undefined) {
-  return (value ?? "").trim().toLowerCase();
-}
+const INITIAL_INVENTORY_ITEM_LIMIT = 120;
+const INVENTORY_LOAD_TIMEOUT_MS = 12_000;
+const INVENTORY_SEARCH_DEBOUNCE_MS = 350;
 
 function formatCurrencyFromCents(cents: number | null | undefined) {
   if (cents == null) {
@@ -75,11 +75,27 @@ function InventoryThumbnail({ item }: { item: InventoryListItem }) {
   );
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+
+    promise
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timeout));
+  });
+}
+
+function hasActiveInventoryFilters(filters: InventoryListFilters) {
+  return Boolean(filters.search?.trim() || filters.color || filters.category || filters.room || filters.locationName);
+}
+
 export default function InventoryTab() {
   const router = useRouter();
   const params = useLocalSearchParams<{ location?: string }>();
   const [items, setItems] = useState<InventoryListItem[]>([]);
+  const [totalItemCount, setTotalItemCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [updatingResults, setUpdatingResults] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [savingItemId, setSavingItemId] = useState<string | null>(null);
@@ -92,35 +108,119 @@ export default function InventoryTab() {
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [packTargetItemId, setPackTargetItemId] = useState<string | null>(null);
+  const loadSequenceRef = useRef(0);
+  const hasLoadedInventoryRef = useRef(false);
 
-  async function loadItems(showRefresh = false) {
+  const loadThumbnails = useCallback(async (itemIds: string[], loadSequence: number) => {
+    try {
+      const thumbnailUrlByItemId = await listInventoryItemThumbnails(itemIds);
+
+      if (loadSequenceRef.current !== loadSequence) {
+        return;
+      }
+
+      setItems((currentItems) =>
+        currentItems.map((item) => ({
+          ...item,
+          thumbnail_url: thumbnailUrlByItemId.get(item.id) ?? item.thumbnail_url,
+        })),
+      );
+    } catch (error) {
+      console.warn("Failed to load inventory thumbnails.", error);
+    }
+  }, []);
+
+  const loadJobsForPackList = useCallback(async (loadSequence: number) => {
+    try {
+      const nextJobs = await listJobs();
+
+      if (loadSequenceRef.current === loadSequence) {
+        setJobs(nextJobs);
+      }
+    } catch (error) {
+      console.warn("Failed to load jobs for inventory pack list.", error);
+    }
+  }, []);
+
+  const loadItems = useCallback(async (showRefresh = false) => {
+    const loadSequence = loadSequenceRef.current + 1;
+    loadSequenceRef.current = loadSequence;
+    const filters: InventoryListFilters = {
+      search,
+      color: selectedColor,
+      category: selectedCategory,
+      room: selectedRoom,
+      locationName: selectedLocation,
+    };
+    const hasExistingItems = hasLoadedInventoryRef.current;
+
     if (showRefresh) {
       setRefreshing(true);
+    } else if (hasExistingItems) {
+      setUpdatingResults(true);
     } else {
       setLoading(true);
     }
 
     try {
-      const [nextItems, nextJobs] = await Promise.all([listInventoryItems(), listJobs()]);
-      setItems(nextItems);
-      setJobs(nextJobs);
+      const nextPage = await withTimeout(
+        listInventoryItemsPage({
+          filters,
+          includeThumbnails: false,
+          maxItems: INITIAL_INVENTORY_ITEM_LIMIT,
+        }),
+        INVENTORY_LOAD_TIMEOUT_MS,
+        "Inventory is taking too long to load. Check the Supabase connection and try again.",
+      );
+
+      if (loadSequenceRef.current !== loadSequence) {
+        return;
+      }
+
+      setItems(nextPage.items);
+      setTotalItemCount(nextPage.totalCount);
+      hasLoadedInventoryRef.current = true;
       setMessage(null);
+      setPackTargetItemId(null);
+      void loadJobsForPackList(loadSequence);
+      void loadThumbnails(
+        nextPage.items.map((item) => item.id),
+        loadSequence,
+      );
     } catch (error) {
+      if (loadSequenceRef.current !== loadSequence) {
+        return;
+      }
+
+      console.error("Failed to load inventory.", error);
       setMessage(error instanceof Error ? error.message : "Failed to load inventory.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (loadSequenceRef.current === loadSequence) {
+        setLoading(false);
+        setUpdatingResults(false);
+        setRefreshing(false);
+      }
     }
-  }
-
-  useEffect(() => {
-    void loadItems();
-  }, []);
+  }, [loadJobsForPackList, loadThumbnails, search, selectedCategory, selectedColor, selectedLocation, selectedRoom]);
 
   useEffect(() => {
     const nextLocation = typeof params.location === "string" && params.location.trim() ? params.location.trim() : null;
     setSelectedLocation(nextLocation);
   }, [params.location]);
+
+  useEffect(() => {
+    const filters: InventoryListFilters = {
+      search,
+      color: selectedColor,
+      category: selectedCategory,
+      room: selectedRoom,
+      locationName: selectedLocation,
+    };
+    const debounceMs = hasActiveInventoryFilters(filters) ? INVENTORY_SEARCH_DEBOUNCE_MS : 0;
+    const timeout = setTimeout(() => void loadItems(), debounceMs);
+
+    return () => clearTimeout(timeout);
+  }, [loadItems, search, selectedCategory, selectedColor, selectedLocation, selectedRoom]);
 
   const colorsList = useMemo(
     () => [...new Set(items.map((item) => item.color).filter((value): value is string => Boolean(value && value.trim())))].slice(0, 8),
@@ -139,37 +239,19 @@ export default function InventoryTab() {
     [items],
   );
 
-  const filteredItems = useMemo(() => {
-    const query = normalize(search);
-
-    return items.filter((item) => {
-      if (query) {
-        const haystack = [item.name, item.sku, item.brand, item.category, item.color, item.current_location_name].map(normalize).join(" ");
-        const tags = item.tags.join(" ").toLowerCase();
-        if (!(haystack.includes(query) || tags.includes(query) || normalize(item.item_code).includes(query))) {
-          return false;
-        }
-      }
-
-      if (selectedColor && normalize(item.color) !== normalize(selectedColor)) {
-        return false;
-      }
-
-      if (selectedCategory && normalize(item.category) !== normalize(selectedCategory)) {
-        return false;
-      }
-
-      if (selectedRoom && normalize(item.room) !== normalize(selectedRoom)) {
-        return false;
-      }
-
-      if (selectedLocation && normalize(item.current_location_name) !== normalize(selectedLocation)) {
-        return false;
-      }
-
-      return true;
-    });
-  }, [items, search, selectedColor, selectedCategory, selectedLocation, selectedRoom]);
+  const activeFilters = useMemo(
+    () =>
+      hasActiveInventoryFilters({
+        search,
+        color: selectedColor,
+        category: selectedCategory,
+        room: selectedRoom,
+        locationName: selectedLocation,
+      }),
+    [search, selectedCategory, selectedColor, selectedLocation, selectedRoom],
+  );
+  const totalMatchingItems = totalItemCount ?? items.length;
+  const hasMoreMatchingItems = totalMatchingItems > items.length;
 
   async function handleAddToPackList(item: InventoryListItem, jobId: string) {
     setSavingItemId(item.id);
@@ -227,13 +309,18 @@ export default function InventoryTab() {
         {!loading ? (
           <Card>
             <Text style={{ color: colors.text, fontSize: 16, fontWeight: "700" }}>
-              Showing {filteredItems.length} of {items.length} items
+              Showing {items.length} of {totalMatchingItems} {activeFilters ? "matching items" : "items"}
             </Text>
             <Text style={{ color: colors.muted }}>
-              {selectedCategory || selectedColor || selectedRoom || search.trim()
-              || selectedLocation
-                ? "Current filters are applied to the full inventory list."
-                : "All imported inventory is included in this count."}
+              {updatingResults
+                ? "Updating results..."
+                : activeFilters
+                  ? hasMoreMatchingItems
+                    ? `Searching the full inventory. Showing the first ${INITIAL_INVENTORY_ITEM_LIMIT} matches to keep thumbnails fast.`
+                    : "Search and filters are running against the full inventory."
+                  : hasMoreMatchingItems
+                    ? `Loaded the first ${INITIAL_INVENTORY_ITEM_LIMIT} of ${totalMatchingItems} items for a faster startup.`
+                    : "Loaded all inventory items."}
             </Text>
           </Card>
         ) : null}
@@ -319,10 +406,10 @@ export default function InventoryTab() {
 
         {loading ? <LoadingState label="Loading inventory..." /> : null}
         {message ? <Message text={message} /> : null}
-        {!loading && filteredItems.length === 0 ? <EmptyState body="Try clearing a filter or add your first item." title="No matching items." /> : null}
+        {!loading && items.length === 0 ? <EmptyState body="Try clearing a filter or add your first item." title="No matching items." /> : null}
 
         {!loading
-          ? filteredItems.map((item) => (
+          ? items.map((item) => (
               <Card key={item.id}>
                 <View style={{ flexDirection: "row", gap: 14 }}>
                   <Pressable onPress={() => openInventoryItem(item.id)}>

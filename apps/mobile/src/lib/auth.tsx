@@ -27,12 +27,31 @@ export function AuthProvider({ children }: PropsWithChildren) {
       return;
     }
 
+    let cancelled = false;
     const supabase = getSupabaseClient();
 
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setBooting(false);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (error) {
+          throw error;
+        }
+
+        if (!cancelled) {
+          setSession(data.session);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to restore Supabase session.", error);
+        if (!cancelled) {
+          setSession(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setBooting(false);
+        }
+      });
 
     const {
       data: { subscription },
@@ -41,6 +60,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     });
 
     return () => {
+      cancelled = true;
       subscription.unsubscribe();
     };
   }, [envReady]);

@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { type Href, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { Image, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
@@ -151,12 +151,17 @@ export default function InventoryItemScreen() {
   const isAlreadyOnPackList = packListJobNames.length > 0;
 
   function handleBackPress() {
-    if (returnPath) {
-      router.replace(returnPath as "/inventory");
+    if (router.canGoBack()) {
+      router.back();
       return;
     }
 
-    router.back();
+    if (returnPath) {
+      router.replace(returnPath as Href);
+      return;
+    }
+
+    router.replace("/inventory");
   }
 
   async function handleSave() {

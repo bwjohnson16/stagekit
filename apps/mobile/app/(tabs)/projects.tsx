@@ -34,7 +34,12 @@ export default function ProjectsTab() {
   }
 
   useEffect(() => {
-    loadJobs().finally(() => setLoading(false));
+    loadJobs()
+      .catch((error) => {
+        console.error("Failed to load projects.", error);
+        setMessage(error instanceof Error ? error.message : "Failed to load projects.");
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   async function handleCreateProject() {
