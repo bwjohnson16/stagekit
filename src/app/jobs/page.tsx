@@ -68,19 +68,11 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
   if (error) {
     throw new Error(`Failed to load jobs: ${error.message}`);
   }
+  const jobCount = jobs?.length ?? 0;
+  const showingCountLabel = `Showing ${jobCount} job${jobCount === 1 ? "" : "s"}`;
 
   return (
     <section className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm">
-        <div>
-          <h1 className="text-2xl font-semibold">Jobs</h1>
-          <p className="text-sm text-muted">Create jobs and assign inventory items to them.</p>
-        </div>
-        <Link className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-medium" href="/inventory">
-          View Inventory
-        </Link>
-      </header>
-
       {message ? (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{message}</p>
       ) : null}
@@ -105,6 +97,7 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
       </section>
 
       <section className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+        <div className="border-b border-border px-4 py-3 text-sm font-medium text-muted">{showingCountLabel}</div>
         <table>
           <thead>
             <tr>

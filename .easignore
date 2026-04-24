@@ -1,0 +1,17 @@
+# Keep EAS mobile build uploads focused on the Expo app and required shared types.
+/.git/
+/.next/
+/out/
+/build/
+/node_modules/
+/apps/mobile/node_modules/
+
+/.cache/
+/.venv-bgremove/
+/imports/
+/docs/
+/public/
+/scripts/
+/supabase/
+
+*.tsbuildinfo

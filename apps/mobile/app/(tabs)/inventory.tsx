@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { Image as CachedImage } from "expo-image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Image, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 
 import { AppScreen, Card, EmptyState, Field, Hero, LoadingState, Message, SectionTitle, SecondaryButton } from "../../src/components/ui";
 import { listInventoryItemsPage, listInventoryItemThumbnails, type InventoryListFilters, type InventoryListItem } from "../../src/lib/inventory";
@@ -48,8 +49,10 @@ function FilterPill({
 function InventoryThumbnail({ item }: { item: InventoryListItem }) {
   if (item.thumbnail_url) {
     return (
-      <Image
+      <CachedImage
         alt=""
+        cachePolicy="memory-disk"
+        contentFit="cover"
         source={{ uri: item.thumbnail_url }}
         style={{ width: 84, height: 84, borderRadius: 14, backgroundColor: colors.panelAlt }}
       />

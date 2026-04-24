@@ -1,6 +1,7 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { Image as CachedImage } from "expo-image";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Image, Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
+import { Modal, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 
 import { AppScreen, Card, EmptyState, Field, Hero, LoadingState, Message, PrimaryButton, SecondaryButton, SectionTitle } from "../../src/components/ui";
 import { InventoryThumbnailPicker } from "../../src/components/inventory-thumbnail-picker";
@@ -120,8 +121,10 @@ function PackRequestCard({
         <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
           {request.requested_item_thumbnail_url ? (
             <Pressable onPress={onPreview}>
-              <Image
+              <CachedImage
                 alt=""
+                cachePolicy="memory-disk"
+                contentFit="cover"
                 source={{ uri: request.requested_item_thumbnail_url }}
                 style={{ width: 72, height: 72, borderRadius: 12, backgroundColor: colors.panelAlt }}
               />
@@ -1500,8 +1503,10 @@ export default function ProjectDetailScreen() {
                         <View style={{ flexDirection: "row", gap: 12, alignItems: "center" }}>
                           {item.thumbnail_url ? (
                             <Pressable onPress={() => handleOpenPreview(item.thumbnail_url, `${item.name} (${item.item_code})`)}>
-                              <Image
+                              <CachedImage
                                 alt=""
+                                cachePolicy="memory-disk"
+                                contentFit="cover"
                                 source={{ uri: item.thumbnail_url }}
                                 style={{ width: 72, height: 72, borderRadius: 12, backgroundColor: colors.panelAlt }}
                               />
@@ -1635,11 +1640,13 @@ export default function ProjectDetailScreen() {
                   showsVerticalScrollIndicator={false}
                   style={{ width: "100%", height: "72%" }}
                 >
-                  <Image
+                  <CachedImage
                     alt=""
+                    cachePolicy="memory-disk"
+                    contentFit="contain"
                     key={`${previewImageUrl}-${previewZoom}`}
                     source={{ uri: previewImageUrl }}
-                    style={{ width: previewImageWidth, height: previewImageHeight, resizeMode: "contain" }}
+                    style={{ width: previewImageWidth, height: previewImageHeight }}
                   />
                 </ScrollView>
               ) : null}

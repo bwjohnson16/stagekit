@@ -89,6 +89,10 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
   ]);
 
   const categories = [...new Set(allItems.map((item) => item.category).filter((value): value is string => Boolean(value)))];
+  const showingCountLabel =
+    items.length === allItems.length
+      ? `Showing ${items.length} item${items.length === 1 ? "" : "s"}`
+      : `Showing ${items.length} of ${allItems.length} item${allItems.length === 1 ? "" : "s"}`;
   const supabase = await createServerSupabaseClient();
   const itemIds = items.map((item) => item.id);
   const thumbnailByItemId = new Map<string, string>();
@@ -177,16 +181,6 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
 
   return (
     <section className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm">
-        <div>
-          <h1 className="text-2xl font-semibold">Inventory</h1>
-          <p className="text-sm text-muted">Track staging assets, photos, and assignment status.</p>
-        </div>
-        <Link className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-medium" href="/jobs">
-          View Jobs
-        </Link>
-      </header>
-
       {message ? (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{message}</p>
       ) : null}
@@ -246,6 +240,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
       </section>
 
       <section className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+        <div className="border-b border-border px-4 py-3 text-sm font-medium text-muted">{showingCountLabel}</div>
         <table>
           <thead>
             <tr>

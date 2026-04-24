@@ -58,3 +58,6 @@ next-env.d.ts
 /imports/images-cutout-transparent/
 /imports/review/
 /imports/review-stagekit-batch-*/
+
+# local scratch artifacts
+scratch-file.json

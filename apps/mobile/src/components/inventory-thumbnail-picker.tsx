@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { Image, Pressable, Text, View, useWindowDimensions } from "react-native";
+import { Image as CachedImage } from "expo-image";
+import { useMemo, useState } from "react";
+import { Pressable, Text, View, useWindowDimensions } from "react-native";
 
 import type { InventoryPackCandidate } from "../lib/inventory";
 import { colors } from "../lib/theme";
@@ -54,7 +55,13 @@ function ThumbnailCard({
     >
       <Pressable onPress={onToggle}>
         {item.thumbnail_url ? (
-          <Image alt="" source={{ uri: item.thumbnail_url }} style={{ width: "100%", aspectRatio: 1, backgroundColor: colors.panelAlt }} />
+          <CachedImage
+            alt=""
+            cachePolicy="memory-disk"
+            contentFit="cover"
+            source={{ uri: item.thumbnail_url }}
+            style={{ width: "100%", aspectRatio: 1, backgroundColor: colors.panelAlt }}
+          />
         ) : (
           <View
             style={{
@@ -130,40 +137,50 @@ export function InventoryThumbnailPicker({
   const cardWidth = windowWidth >= 900 ? 280 : windowWidth >= 640 ? 220 : windowWidth - 40;
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-  const pagedItems = useMemo(() => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [items, page]);
+  const currentPage = Math.min(page, totalPages);
+  const pagedItems = useMemo(() => items.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE), [currentPage, items]);
 
-  useEffect(() => {
+  function resetPage() {
     setPage(1);
-  }, [availabilityFilter, items.length, locationFilter, search]);
+  }
 
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
-    }
-  }, [page, totalPages]);
+  function handleSearchChange(value: string) {
+    resetPage();
+    onSearchChange(value);
+  }
+
+  function handleAvailabilityFilterChange(value: AvailabilityFilter) {
+    resetPage();
+    onAvailabilityFilterChange(value);
+  }
+
+  function handleLocationFilterChange(value: string) {
+    resetPage();
+    onLocationFilterChange(value);
+  }
 
   return (
     <View style={{ gap: 12 }}>
-      <Field label="Find" onChangeText={onSearchChange} placeholder="Search by item code, name, category, color..." value={search} />
+      <Field label="Find" onChangeText={handleSearchChange} placeholder="Search by item code, name, category, color..." value={search} />
       <View style={{ gap: 8 }}>
         <Text style={{ color: colors.text, fontSize: 13, fontWeight: "700" }}>Availability</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          <FilterChip label="All" active={availabilityFilter === "all"} onPress={() => onAvailabilityFilterChange("all")} />
-          <FilterChip label="Available" active={availabilityFilter === "available"} onPress={() => onAvailabilityFilterChange("available")} />
-          <FilterChip label="On Project" active={availabilityFilter === "on_job"} onPress={() => onAvailabilityFilterChange("on_job")} />
-          <FilterChip label="Unavailable" active={availabilityFilter === "unavailable"} onPress={() => onAvailabilityFilterChange("unavailable")} />
+          <FilterChip label="All" active={availabilityFilter === "all"} onPress={() => handleAvailabilityFilterChange("all")} />
+          <FilterChip label="Available" active={availabilityFilter === "available"} onPress={() => handleAvailabilityFilterChange("available")} />
+          <FilterChip label="On Project" active={availabilityFilter === "on_job"} onPress={() => handleAvailabilityFilterChange("on_job")} />
+          <FilterChip label="Unavailable" active={availabilityFilter === "unavailable"} onPress={() => handleAvailabilityFilterChange("unavailable")} />
         </View>
       </View>
       <View style={{ gap: 8 }}>
         <Text style={{ color: colors.text, fontSize: 13, fontWeight: "700" }}>Location</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          <FilterChip label="All" active={locationFilter === "all"} onPress={() => onLocationFilterChange("all")} />
+          <FilterChip label="All" active={locationFilter === "all"} onPress={() => handleLocationFilterChange("all")} />
           {locationOptions.slice(0, 8).map((locationName) => (
             <FilterChip
               key={locationName}
               label={locationName}
               active={locationFilter === locationName}
-              onPress={() => onLocationFilterChange(locationName)}
+              onPress={() => handleLocationFilterChange(locationName)}
             />
           ))}
         </View>
@@ -173,13 +190,13 @@ export function InventoryThumbnailPicker({
           {items.length} matching items • {selectedItemIds.length} selected
         </Text>
         <Text style={{ color: colors.muted }}>
-          Page {page} of {totalPages}. Tap thumbnails to build a quick-select set. Search and filters work together.
+          Page {currentPage} of {totalPages}. Tap thumbnails to build a quick-select set. Search and filters work together.
         </Text>
       </Card>
       {items.length > PAGE_SIZE ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Pressable
-            disabled={page === 1}
+            disabled={currentPage === 1}
             onPress={() => setPage((current) => Math.max(1, current - 1))}
             style={{
               borderWidth: 1,
@@ -187,13 +204,13 @@ export function InventoryThumbnailPicker({
               borderRadius: 999,
               paddingHorizontal: 12,
               paddingVertical: 8,
-              opacity: page === 1 ? 0.5 : 1,
+              opacity: currentPage === 1 ? 0.5 : 1,
             }}
           >
             <Text style={{ color: colors.text, fontSize: 13, fontWeight: "700" }}>Previous</Text>
           </Pressable>
           <Pressable
-            disabled={page === totalPages}
+            disabled={currentPage === totalPages}
             onPress={() => setPage((current) => Math.min(totalPages, current + 1))}
             style={{
               borderWidth: 1,
@@ -201,7 +218,7 @@ export function InventoryThumbnailPicker({
               borderRadius: 999,
               paddingHorizontal: 12,
               paddingVertical: 8,
-              opacity: page === totalPages ? 0.5 : 1,
+              opacity: currentPage === totalPages ? 0.5 : 1,
             }}
           >
             <Text style={{ color: colors.text, fontSize: 13, fontWeight: "700" }}>Next</Text>

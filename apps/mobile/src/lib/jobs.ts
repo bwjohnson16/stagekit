@@ -1,14 +1,7 @@
 import type { Database } from "./database";
+import { createSignedPhotoUrlMap, THUMBNAIL_TRANSFORM, type InventoryPhotoRow } from "./photo-urls";
 import { isMissingSceneSchemaError } from "./schema-compat";
 import { getSupabaseClient } from "./supabase";
-
-const PHOTO_URL_TTL_SECONDS = 60 * 60;
-const THUMBNAIL_TRANSFORM = {
-  width: 240,
-  height: 240,
-  resize: "cover",
-  quality: 60,
-} as const;
 
 type JobRow = Database["public"]["Tables"]["jobs"]["Row"];
 
@@ -92,21 +85,6 @@ export type JobSceneApplication = {
   fulfilled_request_count: number;
 };
 
-type InventoryPhotoRow = {
-  id: string;
-  item_id: string;
-  storage_bucket: string;
-  storage_path: string;
-  sort_order: number;
-};
-
-type PhotoTransform = {
-  width: number;
-  height: number;
-  resize: "cover" | "contain" | "fill";
-  quality: number;
-};
-
 type JobPackRequestRow = {
   id: string;
   request_text: string;
@@ -139,80 +117,6 @@ function chunkArray<T>(items: T[], size: number) {
   }
 
   return chunks;
-}
-
-async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[], transform?: PhotoTransform) {
-  const supabase = getSupabaseClient();
-  const signedUrlByKey = new Map<string, string>();
-  const photosByBucket = new Map<string, InventoryPhotoRow[]>();
-
-  for (const photo of photos) {
-    const bucketPhotos = photosByBucket.get(photo.storage_bucket) ?? [];
-    bucketPhotos.push(photo);
-    photosByBucket.set(photo.storage_bucket, bucketPhotos);
-  }
-
-  if (transform) {
-    try {
-      const uniquePhotos = [...photosByBucket.entries()].flatMap(([bucket, bucketPhotos]) =>
-        [...new Set(bucketPhotos.map((photo) => photo.storage_path))].map((storagePath) => ({
-          bucket,
-          storagePath,
-        })),
-      );
-
-      for (const photoChunk of chunkArray(uniquePhotos, 20)) {
-        const signedUrlResults = await Promise.all(
-          photoChunk.map(async (photo) => {
-            const { data, error } = await supabase.storage.from(photo.bucket).createSignedUrl(photo.storagePath, PHOTO_URL_TTL_SECONDS, {
-              transform,
-            });
-
-            if (error) {
-              throw new Error(error.message);
-            }
-
-            return {
-              ...photo,
-              signedUrl: data.signedUrl,
-            };
-          }),
-        );
-
-        for (const entry of signedUrlResults) {
-          if (entry.signedUrl) {
-            signedUrlByKey.set(`${entry.bucket}:${entry.storagePath}`, entry.signedUrl);
-          }
-        }
-      }
-
-      return signedUrlByKey;
-    } catch (error) {
-      console.warn("Falling back to untransformed job photo URLs.", error);
-      return createSignedPhotoUrlMap(photos);
-    }
-  }
-
-  for (const [bucket, bucketPhotos] of photosByBucket.entries()) {
-    const uniquePaths = [...new Set(bucketPhotos.map((photo) => photo.storage_path))];
-    for (const pathChunk of chunkArray(uniquePaths, 100)) {
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrls(pathChunk, PHOTO_URL_TTL_SECONDS);
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      for (const entry of data ?? []) {
-        if (!entry.path || !entry.signedUrl) {
-          continue;
-        }
-
-        signedUrlByKey.set(`${bucket}:${entry.path}`, entry.signedUrl);
-      }
-    }
-  }
-
-  return signedUrlByKey;
 }
 
 async function listInventoryPhotosForItems(itemIds: string[]) {

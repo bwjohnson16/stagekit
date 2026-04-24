@@ -1,6 +1,7 @@
 import { type Href, useLocalSearchParams, useRouter } from "expo-router";
+import { Image as CachedImage } from "expo-image";
 import { useEffect, useMemo, useState } from "react";
-import { Image, Modal, Pressable, ScrollView, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, Text, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 
 import { AppScreen, Card, Field, Hero, LoadingState, Message, PrimaryButton, SecondaryButton } from "../../src/components/ui";
@@ -364,7 +365,13 @@ export default function InventoryItemScreen() {
             {photos.length > 0 ? (
               <>
                 <Pressable onPress={() => setViewerVisible(true)}>
-                  <Image alt="" source={{ uri: photos[activePhotoIndex]?.url }} style={{ width: "100%", height: 280, borderRadius: 18, backgroundColor: colors.panelAlt }} />
+                  <CachedImage
+                    alt=""
+                    cachePolicy="memory-disk"
+                    contentFit="cover"
+                    source={{ uri: photos[activePhotoIndex]?.url }}
+                    style={{ width: "100%", height: 280, borderRadius: 18, backgroundColor: colors.panelAlt }}
+                  />
                 </Pressable>
                 <Text style={{ color: colors.muted }}>Tap photo to enlarge.</Text>
                 {photos.length > 1 ? (
@@ -372,8 +379,10 @@ export default function InventoryItemScreen() {
                     {photos.map((photo, index) => (
                       <View key={photo.id} style={{ gap: 6, width: 92 }}>
                         <Pressable onPress={() => setActivePhotoIndex(index)}>
-                          <Image
+                          <CachedImage
                             alt=""
+                            cachePolicy="memory-disk"
+                            contentFit="cover"
                             source={{ uri: photo.url }}
                             style={{
                               width: 84,
@@ -564,10 +573,12 @@ export default function InventoryItemScreen() {
                   showsVerticalScrollIndicator={false}
                   style={{ width: "100%", height: "72%" }}
                 >
-                  <Image
+                  <CachedImage
                     alt=""
+                    cachePolicy="memory-disk"
+                    contentFit="contain"
                     source={{ uri: photos[activePhotoIndex].url }}
-                    style={{ width: "100%", height: "100%", resizeMode: "contain" }}
+                    style={{ width: "100%", height: "100%" }}
                   />
                 </ScrollView>
               ) : null}
@@ -575,8 +586,10 @@ export default function InventoryItemScreen() {
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
                   {photos.map((photo, index) => (
                     <Pressable key={`${photo.id}-viewer`} onPress={() => setActivePhotoIndex(index)}>
-                      <Image
+                      <CachedImage
                         alt=""
+                        cachePolicy="memory-disk"
+                        contentFit="cover"
                         source={{ uri: photo.url }}
                         style={{
                           width: 72,

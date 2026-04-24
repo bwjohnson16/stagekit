@@ -1,18 +1,11 @@
 import type { Database } from "./database";
+import { createSignedPhotoUrlMap, THUMBNAIL_TRANSFORM, type InventoryPhotoRow } from "./photo-urls";
 import { fileUriToArrayBuffer } from "./storage";
 import { getSupabaseClient } from "./supabase";
 
 export const inventoryStatusOptions = ["available", "on_job", "packed", "maintenance", "sold", "lost"] as const;
 export const inventoryConditionOptions = ["new", "like_new", "good", "fair", "rough"] as const;
 const INVENTORY_PAGE_SIZE = 500;
-const PHOTO_URL_TTL_SECONDS = 60 * 60;
-const THUMBNAIL_TRANSFORM = {
-  width: 240,
-  height: 240,
-  resize: "cover",
-  quality: 60,
-} as const;
-const SIGNED_URL_CACHE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 export type InventoryItemStatus = Database["public"]["Enums"]["inventory_item_status"];
 export type InventoryItemCondition = Database["public"]["Enums"]["inventory_condition"];
@@ -55,21 +48,6 @@ export type InventoryListFilters = {
   locationName?: string | null;
 };
 
-type InventoryPhotoRow = {
-  id: string;
-  item_id: string;
-  storage_bucket: string;
-  storage_path: string;
-  sort_order: number;
-};
-
-type PhotoTransform = {
-  width: number;
-  height: number;
-  resize: "cover" | "contain" | "fill";
-  quality: number;
-};
-
 type InventoryQueryResult = PromiseLike<{
   data: unknown[] | null;
   error: { message: string } | null;
@@ -83,8 +61,6 @@ type InventoryItemsQuery = {
   order: (column: string, options: { ascending: boolean }) => InventoryItemsQuery;
   range: (from: number, to: number) => InventoryQueryResult;
 };
-
-const signedPhotoUrlCache = new Map<string, { expiresAt: number; url: string }>();
 
 export type InventoryPhoto = {
   id: string;
@@ -102,122 +78,6 @@ function chunkArray<T>(items: T[], size: number) {
   }
 
   return chunks;
-}
-
-function getSignedPhotoUrlCacheKey(bucket: string, storagePath: string, transform?: PhotoTransform) {
-  return JSON.stringify([bucket, storagePath, transform ?? null]);
-}
-
-function getCachedSignedPhotoUrl(bucket: string, storagePath: string, transform?: PhotoTransform) {
-  const cached = signedPhotoUrlCache.get(getSignedPhotoUrlCacheKey(bucket, storagePath, transform));
-
-  if (!cached || cached.expiresAt - SIGNED_URL_CACHE_REFRESH_MARGIN_MS <= Date.now()) {
-    return null;
-  }
-
-  return cached.url;
-}
-
-function setCachedSignedPhotoUrl(bucket: string, storagePath: string, url: string, transform?: PhotoTransform) {
-  signedPhotoUrlCache.set(getSignedPhotoUrlCacheKey(bucket, storagePath, transform), {
-    expiresAt: Date.now() + PHOTO_URL_TTL_SECONDS * 1000,
-    url,
-  });
-}
-
-async function createSignedPhotoUrlMap(photos: InventoryPhotoRow[], transform?: PhotoTransform) {
-  const supabase = getSupabaseClient();
-  const signedUrlByKey = new Map<string, string>();
-  const photosByBucket = new Map<string, InventoryPhotoRow[]>();
-
-  for (const photo of photos) {
-    const bucketPhotos = photosByBucket.get(photo.storage_bucket) ?? [];
-    bucketPhotos.push(photo);
-    photosByBucket.set(photo.storage_bucket, bucketPhotos);
-  }
-
-  if (transform) {
-    try {
-      const uniquePhotos = [...photosByBucket.entries()].flatMap(([bucket, bucketPhotos]) =>
-        [...new Set(bucketPhotos.map((photo) => photo.storage_path))].map((storagePath) => ({
-          bucket,
-          storagePath,
-        })),
-      );
-      const uncachedPhotos = uniquePhotos.filter((photo) => {
-        const cachedUrl = getCachedSignedPhotoUrl(photo.bucket, photo.storagePath, transform);
-        if (cachedUrl) {
-          signedUrlByKey.set(`${photo.bucket}:${photo.storagePath}`, cachedUrl);
-          return false;
-        }
-
-        return true;
-      });
-
-      for (const photoChunk of chunkArray(uncachedPhotos, 20)) {
-        const signedUrlResults = await Promise.all(
-          photoChunk.map(async (photo) => {
-            const { data, error } = await supabase.storage.from(photo.bucket).createSignedUrl(photo.storagePath, PHOTO_URL_TTL_SECONDS, {
-              transform,
-            });
-
-            if (error) {
-              throw new Error(error.message);
-            }
-
-            return {
-              ...photo,
-              signedUrl: data.signedUrl,
-            };
-          }),
-        );
-
-        for (const entry of signedUrlResults) {
-          if (entry.signedUrl) {
-            setCachedSignedPhotoUrl(entry.bucket, entry.storagePath, entry.signedUrl, transform);
-            signedUrlByKey.set(`${entry.bucket}:${entry.storagePath}`, entry.signedUrl);
-          }
-        }
-      }
-
-      return signedUrlByKey;
-    } catch (error) {
-      console.warn("Falling back to untransformed inventory photo URLs.", error);
-      return createSignedPhotoUrlMap(photos);
-    }
-  }
-
-  for (const [bucket, bucketPhotos] of photosByBucket.entries()) {
-    const uniquePaths = [...new Set(bucketPhotos.map((photo) => photo.storage_path))];
-    const uncachedPaths = uniquePaths.filter((storagePath) => {
-      const cachedUrl = getCachedSignedPhotoUrl(bucket, storagePath);
-      if (cachedUrl) {
-        signedUrlByKey.set(`${bucket}:${storagePath}`, cachedUrl);
-        return false;
-      }
-
-      return true;
-    });
-
-    for (const pathChunk of chunkArray(uncachedPaths, 100)) {
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrls(pathChunk, PHOTO_URL_TTL_SECONDS);
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      for (const entry of data ?? []) {
-        if (!entry.path || !entry.signedUrl) {
-          continue;
-        }
-
-        signedUrlByKey.set(`${bucket}:${entry.path}`, entry.signedUrl);
-        setCachedSignedPhotoUrl(bucket, entry.path, entry.signedUrl);
-      }
-    }
-  }
-
-  return signedUrlByKey;
 }
 
 async function listInventoryPhotosForItems(itemIds: string[]) {
