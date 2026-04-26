@@ -3,6 +3,7 @@ import { Image, Pressable, Text, View } from "react-native";
 
 import * as ImagePicker from "expo-image-picker";
 
+import { CategoryPicker } from "../../src/components/category-picker";
 import { AppScreen, Card, Field, Hero, Message, PrimaryButton, SecondaryButton } from "../../src/components/ui";
 import { listJobs, type Job } from "../../src/lib/jobs";
 import { createInventoryItemWithPhotos } from "../../src/lib/inventory";
@@ -275,7 +276,8 @@ export default function AddItemTab() {
       </Card>
       <Card>
         <Text style={{ color: colors.text, fontSize: 16, fontWeight: "700" }}>Item Details</Text>
-        <Field label="Category" onChangeText={setCategory} placeholder="Sofa" value={category} />
+        <Field label="Category" onChangeText={setCategory} placeholder="Tables / Coffee" value={category} />
+        <CategoryPicker onChange={setCategory} value={category} />
         <Field label="Color" onChangeText={setColor} placeholder="Ivory" value={color} />
         <Field label="Dimensions" onChangeText={setDimensions} placeholder="84 x 36 x 34" value={dimensions} />
         <Text style={{ color: colors.text, fontSize: 14, fontWeight: "700" }}>Disposition</Text>

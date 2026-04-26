@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, Text, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 
+import { CategoryPicker } from "../../src/components/category-picker";
 import { AppScreen, Card, Field, Hero, LoadingState, Message, PrimaryButton, SecondaryButton } from "../../src/components/ui";
 import { listLocations, type Location } from "../../src/lib/locations";
 import { assignItemToJob, createExactItemPackRequest, listJobs, type Job } from "../../src/lib/jobs";
@@ -414,7 +415,8 @@ export default function InventoryItemScreen() {
           </Card>
           <Card>
             <Field label="Item Name" onChangeText={setName} value={name} />
-            <Field label="Category" onChangeText={setCategory} value={category} />
+            <Field label="Category" onChangeText={setCategory} placeholder="Tables / Coffee" value={category} />
+            <CategoryPicker onChange={setCategory} value={category} />
             <Field label="Color" onChangeText={setColor} value={color} />
             <Field label="Dimensions" onChangeText={setDimensions} value={dimensions} />
             <Field label="Room" onChangeText={setRoom} value={room} />

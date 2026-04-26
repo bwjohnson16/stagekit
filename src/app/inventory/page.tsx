@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { inventoryCategorySuggestionValues, sortInventoryCategories } from "@/lib/inventory-taxonomy";
 import {
   createItem,
   listItems,
@@ -88,7 +89,12 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
     listItems(),
   ]);
 
-  const categories = [...new Set(allItems.map((item) => item.category).filter((value): value is string => Boolean(value)))];
+  const categories = sortInventoryCategories([
+    ...new Set([
+      ...inventoryCategorySuggestionValues,
+      ...allItems.map((item) => item.category).filter((value): value is string => Boolean(value)),
+    ]),
+  ]);
   const showingCountLabel =
     items.length === allItems.length
       ? `Showing ${items.length} item${items.length === 1 ? "" : "s"}`
@@ -186,6 +192,11 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
       ) : null}
 
       <form className="grid gap-3 rounded-2xl border border-border bg-surface p-4 shadow-sm md:grid-cols-5" method="get">
+        <datalist id="inventory-category-options">
+          {inventoryCategorySuggestionValues.map((category) => (
+            <option key={category} value={category} />
+          ))}
+        </datalist>
         <input name="q" placeholder="Search name, sku, brand..." defaultValue={q} />
         <select name="status" defaultValue={statusFilter ?? ""}>
           <option value="">All statuses</option>
@@ -218,7 +229,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
         <form action={createItemAction} className="mt-3 grid gap-3 md:grid-cols-5">
           <input name="name" placeholder="Name" required />
           <input name="sku" placeholder="SKU" />
-          <input name="category" placeholder="Category" />
+          <input list="inventory-category-options" name="category" placeholder="Tables / Coffee" />
           <select name="status" defaultValue="available">
             {statusOptions.map((status) => (
               <option key={status} value={status}>

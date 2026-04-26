@@ -2,6 +2,7 @@ import "server-only";
 
 import { z } from "zod";
 
+import { canonicalizeInventoryCategory } from "@/lib/inventory-taxonomy";
 import type { Database } from "@/lib/supabase/database.types";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -137,7 +138,7 @@ export async function listItems(params: ListItemsParams = {}) {
     }
 
     if (parsed.category) {
-      next = next.eq("category", parsed.category);
+      next = next.eq("category", canonicalizeInventoryCategory(parsed.category) ?? parsed.category);
     }
 
     if (parsed.disposition === "dispose") {
@@ -182,9 +183,13 @@ export async function getItem(id: string) {
 
 export async function createItem(payload: InventoryItemInsert) {
   const parsedPayload = createItemSchema.parse(payload);
+  const normalizedPayload = {
+    ...parsedPayload,
+    category: canonicalizeInventoryCategory(parsedPayload.category),
+  };
   const supabase = await createServerSupabaseClient();
 
-  const { data, error } = await supabase.from("inventory_items").insert(parsedPayload).select("*").single();
+  const { data, error } = await supabase.from("inventory_items").insert(normalizedPayload).select("*").single();
   assertNoError(error, "Failed to create inventory item");
   return assertData(data, "Failed to create inventory item");
 }
@@ -192,15 +197,22 @@ export async function createItem(payload: InventoryItemInsert) {
 export async function updateItem(id: string, payload: InventoryItemUpdate) {
   const parsedId = uuidSchema.parse(id);
   const parsedPayload = updateItemSchema.parse(payload);
+  const normalizedPayload = {
+    ...parsedPayload,
+    category:
+      Object.prototype.hasOwnProperty.call(parsedPayload, "category")
+        ? canonicalizeInventoryCategory(parsedPayload.category)
+        : parsedPayload.category,
+  };
   const supabase = await createServerSupabaseClient();
 
-  if (Object.keys(parsedPayload).length === 0) {
+  if (Object.keys(normalizedPayload).length === 0) {
     return getItem(parsedId);
   }
 
   const { data, error } = await supabase
     .from("inventory_items")
-    .update(parsedPayload)
+    .update(normalizedPayload)
     .eq("id", parsedId)
     .select("*")
     .single();

@@ -6,6 +6,8 @@ import path from "node:path";
 
 import { createClient } from "@supabase/supabase-js";
 
+import { canonicalizeInventoryCategory } from "./lib/inventory-taxonomy.mjs";
+
 const execFileAsync = promisify(execFile);
 
 const [, , manifestArg = "imports/manifest.json", ...rawFlags] = process.argv;
@@ -213,7 +215,7 @@ for (let index = 0; index < manifest.items.length; index += 1) {
     .from("inventory_items")
     .insert({
       name: plannedName,
-      category: toNullableText(entry.category),
+      category: canonicalizeInventoryCategory(entry.category),
       color: toNullableText(entry.color),
       material: toNullableText(entry.material),
       dimensions: toNullableText(entry.dimensions),

@@ -32,13 +32,17 @@ function navItemClass(active: boolean) {
   return [
     "group rounded-2xl border px-4 py-3 transition",
     active
-      ? "border-accent bg-accent text-accent-foreground shadow-sm"
+      ? "border-[#173f97] bg-[#173f97] text-white shadow-sm"
       : "border-border/80 bg-white/75 text-foreground hover:border-accent/40 hover:bg-white",
   ].join(" ");
 }
 
+function navLabelClass(active: boolean) {
+  return active ? "text-white" : "text-foreground";
+}
+
 function navDescriptionClass(active: boolean) {
-  return active ? "text-accent-foreground/80" : "text-muted";
+  return active ? "text-blue-100" : "text-muted";
 }
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
@@ -72,7 +76,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               const active = isActivePath(pathname, item.href);
               return (
                 <Link key={item.href} className={navItemClass(active)} href={item.href}>
-                  <div className="text-sm font-semibold">{item.label}</div>
+                  <div className={`text-sm font-semibold ${navLabelClass(active)}`}>{item.label}</div>
                   <div className={`mt-1 text-xs ${navDescriptionClass(active)}`}>{item.description}</div>
                 </Link>
               );
@@ -100,7 +104,7 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
               key={item.href}
               className={[
                 "rounded-xl px-3 py-3 text-center text-sm font-medium transition",
-                active ? "bg-accent text-accent-foreground" : "text-muted hover:bg-slate-50 hover:text-foreground",
+                active ? "bg-[#173f97] text-white" : "text-muted hover:bg-slate-50 hover:text-foreground",
               ].join(" ")}
               href={item.href}
             >

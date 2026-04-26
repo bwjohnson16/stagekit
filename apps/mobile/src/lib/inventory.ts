@@ -1,4 +1,5 @@
 import type { Database } from "./database";
+import { canonicalizeInventoryCategory } from "./inventory-taxonomy";
 import { createSignedPhotoUrlMap, THUMBNAIL_TRANSFORM, type InventoryPhotoRow } from "./photo-urls";
 import { fileUriToArrayBuffer } from "./storage";
 import { getSupabaseClient } from "./supabase";
@@ -216,7 +217,7 @@ function applyInventoryListFilters(query: InventoryItemsQuery, filters: Inventor
   }
 
   if (filters?.category) {
-    nextQuery = nextQuery.eq("category", filters.category);
+    nextQuery = nextQuery.eq("category", canonicalizeInventoryCategory(filters.category) ?? filters.category);
   }
 
   if (filters?.room) {
@@ -468,9 +469,16 @@ export async function listPackListInventoryItems() {
 
 export async function updateInventoryItem(itemId: string, payload: InventoryItemUpdate) {
   const supabase = getSupabaseClient();
+  const normalizedPayload = {
+    ...payload,
+    category:
+      Object.prototype.hasOwnProperty.call(payload, "category")
+        ? canonicalizeInventoryCategory(payload.category ?? null)
+        : payload.category,
+  };
   const { data, error } = await supabase
     .from("inventory_items")
-    .update(payload)
+    .update(normalizedPayload)
     .eq("id", itemId)
     .select("id,name,sku,category,status,condition,brand,color,material,dimensions,item_code,marked_for_disposal,notes,estimated_listing_price_cents,purchase_price_cents,purchase_date,replacement_cost_cents,current_location_id,room,source_job_id,tags")
     .single();
@@ -696,7 +704,7 @@ export async function createInventoryItemWithPhotos({
     .from("inventory_items")
     .insert({
       name,
-      category: toNullableText(category),
+      category: canonicalizeInventoryCategory(category),
       color: toNullableText(color),
       dimensions: toNullableText(dimensions),
       marked_for_disposal: markedForDisposal,

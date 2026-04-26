@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { inventoryCategorySuggestionValues } from "@/lib/inventory-taxonomy";
 import {
   addPhotoRow,
   deleteItem,
@@ -249,6 +250,11 @@ export default async function ItemDetailPage({
 
       <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
         <h2 className="text-lg font-semibold">Details</h2>
+        <datalist id="inventory-category-options">
+          {inventoryCategorySuggestionValues.map((category) => (
+            <option key={category} value={category} />
+          ))}
+        </datalist>
         <div className="mt-3 grid gap-3 rounded-xl border border-border/70 bg-slate-50 p-3 text-sm text-slate-700 md:grid-cols-3">
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Estimated List Price</p>
@@ -288,7 +294,7 @@ export default async function ItemDetailPage({
             <label className="mb-1 block text-sm font-medium" htmlFor="category">
               Category
             </label>
-            <input id="category" name="category" defaultValue={item.category ?? ""} />
+            <input id="category" list="inventory-category-options" name="category" defaultValue={item.category ?? ""} />
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium" htmlFor="status">
