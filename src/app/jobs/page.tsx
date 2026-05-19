@@ -29,6 +29,14 @@ function formatDateRange(startDate: string | null, endDate: string | null) {
   return `${startDate ?? "—"} to ${endDate ?? "—"}`;
 }
 
+function formatStatus(value: string) {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 function firstValue(value: string | string[] | undefined) {
@@ -80,6 +88,8 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
   const jobCount = jobs?.length ?? 0;
   const showingCountLabel = `Showing ${jobCount} job${jobCount === 1 ? "" : "s"}`;
   const isCreateSectionOpen = jobCount === 0 || firstValue(params.new) === "1";
+  const activeJobs = jobs.filter((job) => job.status !== "archived" && job.status !== "cancelled");
+  const archivedJobs = jobs.filter((job) => job.status === "archived" || job.status === "cancelled");
 
   return (
     <section className="space-y-6">
@@ -91,8 +101,8 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Projects</p>
-            <h1 className="text-2xl font-semibold tracking-tight">See active staging work.</h1>
-            <p className="text-sm text-muted">Open any project card to jump into the job details page.</p>
+            <h1 className="text-2xl font-semibold tracking-tight">See staging work and project history.</h1>
+            <p className="text-sm text-muted">Open any project card to manage live work or review archived rooms, categories, and items.</p>
           </div>
           <div className="rounded-full border border-border bg-surface px-4 py-2 text-sm font-medium text-muted shadow-sm">{showingCountLabel}</div>
         </div>
@@ -103,47 +113,77 @@ export default async function JobsPage({ searchParams }: { searchParams: SearchP
             <p className="mt-2 text-sm text-muted">Create a new job below, then open it to manage assignments, pack requests, and scenes.</p>
           </section>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2">
-            {jobs.map((job) => (
-              <Link
-                key={job.id}
-                aria-label={`Open ${job.name}`}
-                className="group block rounded-2xl border border-border bg-surface p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-accent/35 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-                href={`/jobs/${job.id}`}
-              >
-                <div className="flex items-start justify-between gap-3">
+          <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+              {activeJobs.map((job) => (
+                <Link
+                  key={job.id}
+                  aria-label={`Open ${job.name}`}
+                  className="group block rounded-2xl border border-border bg-surface p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-accent/35 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                  href={`/jobs/${job.id}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-xl font-semibold tracking-tight text-foreground transition group-hover:text-accent">{job.name}</h2>
+                      <p className="mt-1 text-sm text-muted">{formatJobAddress(job) ?? "No address yet"}</p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">{formatStatus(job.status)}</span>
+                  </div>
+
+                  <div className="mt-3 space-y-1 text-sm text-muted">
+                    <p>{job.latitude != null && job.longitude != null ? "Map pin ready" : "Missing map coordinates"}</p>
+                    <p>Dates: {formatDateRange(job.start_date, job.end_date)}</p>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">Applied Scenes</p>
+                      <p className="mt-1 text-base font-semibold text-foreground">{job.sceneApplicationCount}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">Pack Requests</p>
+                      <p className="mt-1 text-base font-semibold text-foreground">{job.packRequestCount}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">Currently Assigned</p>
+                      <p className="mt-1 text-base font-semibold text-foreground">{job.activeItemCount}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">Imported Items</p>
+                      <p className="mt-1 text-base font-semibold text-foreground">{job.importedItemCount}</p>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+
+            {archivedJobs.length > 0 ? (
+              <details className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
                   <div>
-                    <h2 className="text-xl font-semibold tracking-tight text-foreground transition group-hover:text-accent">{job.name}</h2>
-                    <p className="mt-1 text-sm text-muted">{formatJobAddress(job) ?? "No address yet"}</p>
+                    <h2 className="text-lg font-semibold">Archived Projects</h2>
+                    <p className="text-sm text-muted">Review historical pack lists, rooms, and item usage.</p>
                   </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">{job.status}</span>
+                  <span className="rounded-full border border-border bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-muted">{archivedJobs.length}</span>
+                </summary>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {archivedJobs.map((job) => (
+                    <Link key={job.id} className="block rounded-xl border border-border bg-slate-50 px-4 py-3 transition hover:border-accent/35 hover:bg-white" href={`/jobs/${job.id}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-semibold text-foreground">{job.name}</h3>
+                          <p className="mt-1 text-sm text-muted">{formatJobAddress(job) ?? "No address yet"}</p>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">{formatStatus(job.status)}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-muted">
+                        {job.packRequestCount} pack requests • {job.sceneApplicationCount} scenes • {job.activeItemCount} assigned
+                      </p>
+                    </Link>
+                  ))}
                 </div>
-
-                <div className="mt-3 space-y-1 text-sm text-muted">
-                  <p>{job.latitude != null && job.longitude != null ? "Map pin ready" : "Missing map coordinates"}</p>
-                  <p>Dates: {formatDateRange(job.start_date, job.end_date)}</p>
-                </div>
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl bg-slate-50 px-3 py-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Applied Scenes</p>
-                    <p className="mt-1 text-base font-semibold text-foreground">{job.sceneApplicationCount}</p>
-                  </div>
-                  <div className="rounded-xl bg-slate-50 px-3 py-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Pack Requests</p>
-                    <p className="mt-1 text-base font-semibold text-foreground">{job.packRequestCount}</p>
-                  </div>
-                  <div className="rounded-xl bg-slate-50 px-3 py-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Currently Assigned</p>
-                    <p className="mt-1 text-base font-semibold text-foreground">{job.activeItemCount}</p>
-                  </div>
-                  <div className="rounded-xl bg-slate-50 px-3 py-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">Imported Items</p>
-                    <p className="mt-1 text-base font-semibold text-foreground">{job.importedItemCount}</p>
-                  </div>
-                </div>
-              </Link>
-            ))}
+              </details>
+            ) : null}
           </div>
         )}
       </section>

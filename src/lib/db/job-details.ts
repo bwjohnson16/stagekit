@@ -334,6 +334,15 @@ export async function updateJob({
   }
 }
 
+export async function updateJobStatus(jobId: string, status: "active" | "completed" | "archived" | "cancelled") {
+  const supabase = await createServerSupabaseClient();
+  const { error } = await supabase.from("jobs").update({ status }).eq("id", jobId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
 export async function getJobDetail(jobId: string) {
   const supabase = await createServerSupabaseClient();
   const { data: job, error: jobError } = await supabase

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { InventoryHistoryMarker } from "@/components/inventory/inventory-history-marker";
 import { inventoryCategorySuggestionValues, sortInventoryCategories } from "@/lib/inventory-taxonomy";
 import {
   createItem,
@@ -43,6 +44,30 @@ function parseCondition(value: string): InventoryItemCondition | undefined {
 
 function parseDisposition(value: string) {
   return value === "keep" || value === "dispose" ? value : undefined;
+}
+
+function buildInventoryReturnTo(params: {
+  q: string;
+  statusFilter?: InventoryItemStatus;
+  categoryFilter: string;
+  dispositionFilter?: "keep" | "dispose";
+}) {
+  const searchParams = new URLSearchParams();
+  if (params.q) {
+    searchParams.set("q", params.q);
+  }
+  if (params.statusFilter) {
+    searchParams.set("status", params.statusFilter);
+  }
+  if (params.categoryFilter) {
+    searchParams.set("category", params.categoryFilter);
+  }
+  if (params.dispositionFilter) {
+    searchParams.set("disposition", params.dispositionFilter);
+  }
+
+  const query = searchParams.toString();
+  return query.length > 0 ? `/inventory?${query}` : "/inventory";
 }
 
 function formatCurrency(cents: number | null) {
@@ -95,6 +120,12 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
       ...allItems.map((item) => item.category).filter((value): value is string => Boolean(value)),
     ]),
   ]);
+  const inventoryReturnTo = buildInventoryReturnTo({
+    q,
+    statusFilter,
+    categoryFilter,
+    dispositionFilter,
+  });
   const showingCountLabel =
     items.length === allItems.length
       ? `Showing ${items.length} item${items.length === 1 ? "" : "s"}`
@@ -187,6 +218,8 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
 
   return (
     <section className="space-y-6">
+      <InventoryHistoryMarker />
+
       {message ? (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{message}</p>
       ) : null}
@@ -289,7 +322,10 @@ export default async function InventoryPage({ searchParams }: { searchParams: Se
                     )}
                   </td>
                   <td>
-                    <Link className="font-medium text-accent hover:underline" href={`/inventory/${item.id}`}>
+                    <Link
+                      className="font-medium text-accent hover:underline"
+                      href={`/inventory/${item.id}?returnTo=${encodeURIComponent(inventoryReturnTo)}`}
+                    >
                       {item.name}
                     </Link>
                   </td>

@@ -14,6 +14,7 @@ import {
   listSceneTemplates,
   togglePackRequestOptional,
   updateJob,
+  updateJobStatus,
   updatePackRequest,
   updatePackRequestStatus,
   type JobPackRequest,
@@ -27,8 +28,11 @@ type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 const primaryButtonClass = "inline-flex items-center justify-center rounded-xl bg-[#c96f3d] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#b86133]";
 const secondaryButtonClass =
   "inline-flex items-center justify-center rounded-xl border border-[#e3d0ba] bg-white px-4 py-2.5 text-sm font-semibold text-[#33413b] transition hover:bg-[#fffaf4]";
+const quietButtonClass =
+  "inline-flex items-center justify-center rounded-xl border border-[#d4ded7] bg-[#f7fbf8] px-4 py-2.5 text-sm font-semibold text-[#254238] transition hover:bg-[#eef6f0]";
 const sectionCardClass = "rounded-3xl border border-[#e8d9c6] bg-[#fffdf9] p-5 shadow-sm";
 const mutedTextClass = "text-sm leading-6 text-[#6f756c]";
+const projectStatuses = ["active", "completed", "archived", "cancelled"] as const;
 
 function firstValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -68,6 +72,14 @@ function formatTimestamp(value: string | null) {
   }
 
   return date.toLocaleString();
+}
+
+function formatStatus(value: string) {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function detailsOpen(activeSection: string | null, sectionName: string, fallback = false) {
@@ -136,6 +148,10 @@ function SectionHeader({
   );
 }
 
+function buildCountLabel(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 export default async function JobDetailPage({
   params,
   searchParams,
@@ -173,6 +189,9 @@ export default async function JobDetailPage({
     if (!status) {
       redirect(buildJobUrl(id, { message: "Project status is required.", tone: "error", section: "edit-project" }));
     }
+    if (!projectStatuses.includes(status as (typeof projectStatuses)[number])) {
+      redirect(buildJobUrl(id, { message: "Choose a valid project status.", tone: "error", section: "edit-project" }));
+    }
 
     try {
       await updateJob({
@@ -190,6 +209,18 @@ export default async function JobDetailPage({
     } catch (error) {
       const nextMessage = error instanceof Error ? error.message : "Failed to update project.";
       redirect(buildJobUrl(id, { message: nextMessage, tone: "error", section: "edit-project" }));
+    }
+  }
+
+  async function archiveProjectAction() {
+    "use server";
+
+    try {
+      await updateJobStatus(id, "archived");
+      redirect(buildJobUrl(id, { message: "Project archived. Historical pack requests and exact picks are still visible.", tone: "success", section: "archive-readiness" }));
+    } catch (error) {
+      const nextMessage = error instanceof Error ? error.message : "Failed to archive project.";
+      redirect(buildJobUrl(id, { message: nextMessage, tone: "error", section: "archive-readiness" }));
     }
   }
 
@@ -540,12 +571,13 @@ export default async function JobDetailPage({
   ]);
 
   const projectLocation = formatAddress(job);
-  const projectSubtitle = [projectLocation, job.status].filter(Boolean).join(" • ");
+  const projectSubtitle = [projectLocation, formatStatus(job.status)].filter(Boolean).join(" • ");
   const activeAssignments = assignments.filter((assignment) => !assignment.checked_in_at);
   const completedAssignments = assignments.filter((assignment) => Boolean(assignment.checked_in_at));
   const activeAssignedItemIds = new Set(activeAssignments.map((assignment) => assignment.item_id));
   const openPackRequests = packRequests.filter((request) => request.status !== "cancelled");
   const fulfilledRequestCount = openPackRequests.filter((request) => request.picked_count >= request.quantity).length;
+  const totalRequestedQuantity = openPackRequests.reduce((sum, request) => sum + request.quantity, 0);
   const openPackRequestsByRoom = Object.entries(
     openPackRequests.reduce<Record<string, JobPackRequest[]>>((acc, request) => {
       const key = (request.room ?? "").trim() || "No room";
@@ -558,6 +590,45 @@ export default async function JobDetailPage({
     return a.localeCompare(b);
   });
   const extraPickedItems = pickedItems.filter((pickedItem) => !pickedItem.pack_request_id);
+  const exactItemIds = new Set(pickedItems.map((pickedItem) => pickedItem.item_id));
+  const assignedItemIds = new Set(assignments.map((assignment) => assignment.item_id));
+  const rememberedItemIds = new Set([...exactItemIds, ...assignedItemIds]);
+  const assignedWithoutExactPickCount = assignments.filter((assignment) => !exactItemIds.has(assignment.item_id)).length;
+  const exactPicksNotAssignedCount = pickedItems.filter((pickedItem) => !assignedItemIds.has(pickedItem.item_id)).length;
+  const requestsWithoutExactPicksCount = openPackRequests.filter((request) => request.picked_count === 0).length;
+  const closeoutWarnings = [
+    activeAssignments.length > 0 ? `${buildCountLabel(activeAssignments.length, "item")} still checked out` : null,
+    assignedWithoutExactPickCount > 0 ? `${buildCountLabel(assignedWithoutExactPickCount, "assignment")} without exact pick history` : null,
+    requestsWithoutExactPicksCount > 0 ? `${buildCountLabel(requestsWithoutExactPicksCount, "request")} with no exact items logged` : null,
+  ].filter((value): value is string => Boolean(value));
+  const roomArchiveSummary = openPackRequestsByRoom.map(([roomLabel, requests]) => {
+    const requestQuantity = requests.reduce((sum, request) => sum + request.quantity, 0);
+    const exactPicks = requests.reduce((sum, request) => sum + request.picked_count, 0);
+    const categories = [...new Set(requests.map((request) => request.category).filter((value): value is string => Boolean(value)))].sort((a, b) => a.localeCompare(b));
+
+    return {
+      roomLabel,
+      requestCount: requests.length,
+      requestQuantity,
+      exactPicks,
+      categories,
+    };
+  });
+  const categoryArchiveSummary = Object.entries(
+    openPackRequests.reduce<Record<string, { requestCount: number; requestQuantity: number; exactPicks: number }>>((acc, request) => {
+      const key = (request.category ?? "").trim() || "Uncategorized";
+      const current = acc[key] ?? { requestCount: 0, requestQuantity: 0, exactPicks: 0 };
+      current.requestCount += 1;
+      current.requestQuantity += request.quantity;
+      current.exactPicks += request.picked_count;
+      acc[key] = current;
+      return acc;
+    }, {}),
+  ).sort(([a], [b]) => {
+    if (a === "Uncategorized") return 1;
+    if (b === "Uncategorized") return -1;
+    return a.localeCompare(b);
+  });
   const editingPackRequest = editRequestId ? openPackRequests.find((request) => request.id === editRequestId) ?? null : null;
   const authorableRooms = openPackRequestsByRoom.filter(([roomLabel]) => roomLabel !== "No room");
   const defaultSceneSourceRoom = authorableRooms[0]?.[0] ?? "";
@@ -633,7 +704,13 @@ export default async function JobDetailPage({
           </div>
           <div>
             <label className="mb-2 block text-sm font-semibold text-[#33413b]">Status</label>
-            <input defaultValue={job.status} name="status" />
+            <select defaultValue={projectStatuses.includes(job.status as (typeof projectStatuses)[number]) ? job.status : "active"} name="status">
+              {projectStatuses.map((status) => (
+                <option key={status} value={status}>
+                  {formatStatus(status)}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="rounded-2xl border border-[#ecdcc7] bg-[#fff8ef] px-4 py-3 md:col-span-2">
             <p className={mutedTextClass}>
@@ -671,6 +748,93 @@ export default async function JobDetailPage({
           {sceneApplications.length} applied scene{sceneApplications.length === 1 ? "" : "s"} are currently feeding this room-by-room pack list.
         </p>
       </section>
+
+      <details className={sectionCardClass} open={detailsOpen(activeSection, "archive-readiness", job.status === "archived")}>
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+          <SectionHeader
+            title="Archive Readiness"
+            description="Closeout keeps project history useful without pretending every item was perfectly assigned and checked in."
+            right={<span className={quietButtonClass}>{job.status === "archived" ? "Archived" : "Review"}</span>}
+          />
+        </summary>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-4">
+          <MetricCard label="Remembered Items" value={String(rememberedItemIds.size)} />
+          <MetricCard label="Open Check-ins" value={String(activeAssignments.length)} />
+          <MetricCard label="Rooms Captured" value={String(roomArchiveSummary.length)} />
+          <MetricCard label="Requested Quantity" value={String(totalRequestedQuantity)} />
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-2xl border border-[#ecdcc7] bg-white p-4">
+            <h3 className="text-lg font-semibold text-[#20322a]">Historical Value</h3>
+            <p className={`${mutedTextClass} mt-2`}>
+              This project can still teach future pack lists from rooms, categories, requested quantities, exact picks, and applied scenes.
+              {exactPicksNotAssignedCount > 0 ? ` ${buildCountLabel(exactPicksNotAssignedCount, "exact pick")} were logged without an active assignment record.` : ""}
+            </p>
+            <div className="mt-4 space-y-3">
+              {roomArchiveSummary.length === 0 ? (
+                <p className={mutedTextClass}>No room-level requests are available yet.</p>
+              ) : (
+                roomArchiveSummary.map((room) => (
+                  <div key={room.roomLabel} className="rounded-xl border border-[#f0e4d3] bg-[#fffaf4] px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold text-[#20322a]">{room.roomLabel}</p>
+                      <p className="text-sm font-medium text-[#536158]">
+                        {room.exactPicks} exact / {room.requestQuantity} requested
+                      </p>
+                    </div>
+                    <p className={`${mutedTextClass} mt-1`}>
+                      {buildCountLabel(room.requestCount, "request")} {room.categories.length > 0 ? `• ${room.categories.join(", ")}` : "• No categories"}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-[#ecdcc7] bg-white p-4">
+            <h3 className="text-lg font-semibold text-[#20322a]">Closeout Notes</h3>
+            {closeoutWarnings.length === 0 ? (
+              <p className={`${mutedTextClass} mt-2`}>No obvious cleanup gaps from the current records.</p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {closeoutWarnings.map((warning) => (
+                  <li key={warning} className="rounded-xl bg-[#fff8ef] px-3 py-2 text-sm font-medium text-[#5d4736]">
+                    {warning}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className={`${mutedTextClass} mt-4`}>
+              Archiving only changes the project status. Inventory availability still comes from check-ins and item status, so historical data stays intact.
+            </p>
+            {job.status === "archived" ? null : (
+              <form action={archiveProjectAction} className="mt-4">
+                <button className={primaryButtonClass} type="submit">
+                  Archive Project
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+
+        {categoryArchiveSummary.length > 0 ? (
+          <div className="mt-5 rounded-2xl border border-[#ecdcc7] bg-white p-4">
+            <h3 className="text-lg font-semibold text-[#20322a]">Category Snapshot</h3>
+            <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {categoryArchiveSummary.map(([category, stats]) => (
+                <div key={category} className="rounded-xl bg-[#f7fbf8] px-3 py-2">
+                  <p className="font-semibold text-[#20322a]">{category}</p>
+                  <p className={`${mutedTextClass} mt-1`}>
+                    {stats.requestQuantity} requested • {stats.exactPicks} exact • {buildCountLabel(stats.requestCount, "line")}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </details>
 
       <details className={sectionCardClass} open={detailsOpen(activeSection, "add-pack-list", Boolean(editingPackRequest))}>
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">

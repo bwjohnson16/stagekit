@@ -1,6 +1,7 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { BackToInventoryButton } from "@/components/inventory/back-to-inventory-button";
+import { normalizeInventoryReturnTo } from "@/lib/inventory-navigation";
 import { inventoryCategorySuggestionValues } from "@/lib/inventory-taxonomy";
 import {
   addPhotoRow,
@@ -64,42 +65,66 @@ function formatCurrency(cents: number | null) {
   return cents == null ? "—" : currencyFormatter.format(cents / 100);
 }
 
-function parseCurrencyToCents(rawValue: string, itemId: string, label: string) {
+function parseCurrencyToCents(rawValue: string, itemId: string, label: string, returnTo: string | null) {
   if (!rawValue) {
     return null;
   }
 
   const normalized = rawValue.replaceAll(",", "").replaceAll("$", "");
   if (!/^\d+(\.\d{1,2})?$/.test(normalized)) {
-    redirect(`/inventory/${itemId}?message=${encodeURIComponent(`${label} must be a valid dollar amount.`)}`);
+    redirect(appendSearchParams(`/inventory/${itemId}`, { message: `${label} must be a valid dollar amount.`, returnTo }));
   }
 
   const amount = Number.parseFloat(normalized);
   if (!Number.isFinite(amount) || amount < 0) {
-    redirect(`/inventory/${itemId}?message=${encodeURIComponent(`${label} must be a valid dollar amount.`)}`);
+    redirect(appendSearchParams(`/inventory/${itemId}`, { message: `${label} must be a valid dollar amount.`, returnTo }));
   }
 
   return Math.round(amount * 100);
+}
+
+function readReturnTo(formData: FormData) {
+  return normalizeInventoryReturnTo(readString(formData.get("return_to")));
+}
+
+function appendSearchParams(path: string, params: Record<string, string | null | undefined>) {
+  const [pathname, search = ""] = path.split("?");
+  const nextSearchParams = new URLSearchParams(search);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      nextSearchParams.set(key, value);
+      return;
+    }
+
+    nextSearchParams.delete(key);
+  });
+
+  const nextSearch = nextSearchParams.toString();
+  return nextSearch.length > 0 ? `${pathname}?${nextSearch}` : pathname;
 }
 
 async function updateItemAction(formData: FormData) {
   "use server";
 
   const itemId = readString(formData.get("item_id"));
+  const returnTo = readReturnTo(formData);
   if (!itemId) {
     redirect(`/inventory?message=${encodeURIComponent("Invalid item id.")}`);
   }
 
-  const purchasePrice = parseCurrencyToCents(readString(formData.get("purchase_price_cents")), itemId, "Cost");
+  const purchasePrice = parseCurrencyToCents(readString(formData.get("purchase_price_cents")), itemId, "Cost", returnTo);
   const estimatedListingPrice = parseCurrencyToCents(
     readString(formData.get("estimated_listing_price_cents")),
     itemId,
     "Estimated list price",
+    returnTo,
   );
   const replacementCost = parseCurrencyToCents(
     readString(formData.get("replacement_cost_cents")),
     itemId,
     "Replacement cost",
+    returnTo,
   );
 
   await updateItem(itemId, {
@@ -122,23 +147,24 @@ async function updateItemAction(formData: FormData) {
     current_location_id: toNullableText(readString(formData.get("current_location_id"))),
   });
 
-  redirect(`/inventory/${itemId}?message=${encodeURIComponent("Item updated.")}`);
+  redirect(appendSearchParams(`/inventory/${itemId}`, { message: "Item updated.", returnTo }));
 }
 
 async function uploadPhotoAction(formData: FormData) {
   "use server";
 
   const itemId = readString(formData.get("item_id"));
+  const returnTo = readReturnTo(formData);
   if (!itemId) {
     redirect(`/inventory?message=${encodeURIComponent("Invalid item id.")}`);
   }
 
   const file = formData.get("photo");
   if (!(file instanceof File) || file.size === 0) {
-    redirect(`/inventory/${itemId}?message=${encodeURIComponent("Select a photo to upload.")}`);
+    redirect(appendSearchParams(`/inventory/${itemId}`, { message: "Select a photo to upload.", returnTo }));
   }
   if (file.size > MAX_UPLOAD_BYTES) {
-    redirect(`/inventory/${itemId}?message=${encodeURIComponent("Photo must be 20MB or smaller.")}`);
+    redirect(appendSearchParams(`/inventory/${itemId}`, { message: "Photo must be 20MB or smaller.", returnTo }));
   }
 
   const extensionMatch = file.name.toLowerCase().match(/\.([a-z0-9]+)$/);
@@ -154,7 +180,7 @@ async function uploadPhotoAction(formData: FormData) {
   });
 
   if (uploadError) {
-    redirect(`/inventory/${itemId}?message=${encodeURIComponent(uploadError.message)}`);
+    redirect(appendSearchParams(`/inventory/${itemId}`, { message: uploadError.message, returnTo }));
   }
 
   const { count } = await supabase
@@ -163,19 +189,54 @@ async function uploadPhotoAction(formData: FormData) {
     .eq("item_id", itemId);
 
   await addPhotoRow(itemId, storagePath, count ?? 0);
-  redirect(`/inventory/${itemId}?message=${encodeURIComponent("Photo uploaded.")}`);
+  redirect(appendSearchParams(`/inventory/${itemId}`, { message: "Photo uploaded.", returnTo }));
 }
 
 async function deleteItemAction(formData: FormData) {
   "use server";
 
   const itemId = readString(formData.get("item_id"));
+  const returnTo = readReturnTo(formData);
   if (!itemId) {
     redirect(`/inventory?message=${encodeURIComponent("Invalid item id.")}`);
   }
 
   await deleteItem(itemId);
-  redirect(`/inventory?message=${encodeURIComponent("Item deleted.")}`);
+  redirect(appendSearchParams(returnTo ?? "/inventory", { message: "Item deleted." }));
+}
+
+type LocationOption = {
+  id: string;
+  name: string;
+  kind: string;
+};
+
+const locationKindLabels: Record<string, string> = {
+  warehouse: "Warehouses",
+  unit: "Homes / Units",
+  truck: "Trucks",
+  client: "Client Sites",
+  other: "Other",
+};
+
+function formatLocationGroupLabel(kind: string) {
+  return locationKindLabels[kind] ?? `${kind.slice(0, 1).toUpperCase()}${kind.slice(1)}`;
+}
+
+function groupLocations(locations: LocationOption[]) {
+  const groups = new Map<string, LocationOption[]>();
+
+  locations.forEach((location) => {
+    const existing = groups.get(location.kind) ?? [];
+    existing.push(location);
+    groups.set(location.kind, existing);
+  });
+
+  return Array.from(groups.entries()).map(([kind, options]) => ({
+    kind,
+    label: formatLocationGroupLabel(kind),
+    options,
+  }));
 }
 
 export default async function ItemDetailPage({
@@ -188,6 +249,7 @@ export default async function ItemDetailPage({
   const { id } = await params;
   const search = await searchParams;
   const message = firstValue(search.message);
+  const returnTo = normalizeInventoryReturnTo(firstValue(search.returnTo));
 
   const item = await getItem(id);
   if (!item) {
@@ -196,9 +258,10 @@ export default async function ItemDetailPage({
 
   const supabase = await createServerSupabaseClient();
   const [{ data: locations }, photos] = await Promise.all([
-    supabase.from("locations").select("id,name").order("name", { ascending: true }),
+    supabase.from("locations").select("id,name,kind").order("kind", { ascending: true }).order("name", { ascending: true }),
     listPhotos(id),
   ]);
+  const locationGroups = groupLocations((locations ?? []) as LocationOption[]);
 
   const photosWithUrls = await Promise.all(
     photos.map(async (photo) => {
@@ -238,9 +301,7 @@ export default async function ItemDetailPage({
           {item.marked_for_disposal ? (
             <span className="rounded-full bg-rose-100 px-3 py-1 text-xs font-medium text-rose-800">marked for disposal</span>
           ) : null}
-          <Link className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-medium" href="/inventory">
-            Back to Inventory
-          </Link>
+          <BackToInventoryButton fallbackHref={returnTo ?? "/inventory"} />
         </div>
       </header>
 
@@ -271,6 +332,7 @@ export default async function ItemDetailPage({
         </div>
         <form action={updateItemAction} className="mt-4 grid gap-3 md:grid-cols-2">
           <input type="hidden" name="item_id" value={item.id} />
+          <input type="hidden" name="return_to" value={returnTo ?? ""} />
 
           <div>
             <label className="mb-1 block text-sm font-medium" htmlFor="name">
@@ -391,12 +453,17 @@ export default async function ItemDetailPage({
             <label className="mb-1 block text-sm font-medium" htmlFor="home_location_id">
               Home Location
             </label>
+            <p className="mb-1 text-xs text-muted">Where the item normally belongs when it is not out on a job or moved temporarily.</p>
             <select id="home_location_id" name="home_location_id" defaultValue={item.home_location_id ?? ""}>
               <option value="">None</option>
-              {(locations ?? []).map((location) => (
-                <option key={location.id} value={location.id}>
-                  {location.name}
-                </option>
+              {locationGroups.map((group) => (
+                <optgroup key={group.kind} label={group.label}>
+                  {group.options.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
@@ -404,12 +471,17 @@ export default async function ItemDetailPage({
             <label className="mb-1 block text-sm font-medium" htmlFor="current_location_id">
               Current Location
             </label>
+            <p className="mb-1 text-xs text-muted">Where the item is physically sitting right now. These options come from the shared locations list.</p>
             <select id="current_location_id" name="current_location_id" defaultValue={item.current_location_id ?? ""}>
               <option value="">None</option>
-              {(locations ?? []).map((location) => (
-                <option key={location.id} value={location.id}>
-                  {location.name}
-                </option>
+              {locationGroups.map((group) => (
+                <optgroup key={group.kind} label={group.label}>
+                  {group.options.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
@@ -429,6 +501,7 @@ export default async function ItemDetailPage({
         <h2 className="text-lg font-semibold">Photos</h2>
         <form action={uploadPhotoAction} className="mt-3 flex flex-wrap items-center gap-3">
           <input type="hidden" name="item_id" value={item.id} />
+          <input type="hidden" name="return_to" value={returnTo ?? ""} />
           <input accept="image/*" name="photo" type="file" />
           <button className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground" type="submit">
             Upload
@@ -463,6 +536,7 @@ export default async function ItemDetailPage({
         <p className="mt-2 text-sm text-rose-900">This permanently removes the item, its photos, any job assignment rows, and exact-item pack list links.</p>
         <form action={deleteItemAction} className="mt-4">
           <input type="hidden" name="item_id" value={item.id} />
+          <input type="hidden" name="return_to" value={returnTo ?? ""} />
           <button className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white" type="submit">
             Delete Item
           </button>
